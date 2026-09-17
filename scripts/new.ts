@@ -18,7 +18,7 @@ const slug = title.trim().toLowerCase()
 const now = new Date();
 const tz = -now.getTimezoneOffset();
 const sign = tz >= 0 ? '+' : '-';
-const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
+const pad = (n: number): string => String(Math.floor(Math.abs(n))).padStart(2, '0');
 const iso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}${sign}${pad(tz / 60)}:${pad(tz % 60)}`;
 
 const file = path.join(POSTS, `${slug}.md`);

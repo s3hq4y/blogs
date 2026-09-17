@@ -5,14 +5,21 @@
   "type": "module",
   "description": "s3hq4y's blog — static site generated from Markdown.",
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "dev": "node scripts/serve.mjs",
-    "new": "node scripts/new.mjs"
+    "build": "tsx scripts/build.ts",
+    "dev": "tsx scripts/serve.ts",
+    "new": "tsx scripts/new.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "github-markdown-css": "^5.8.1",
     "highlight.js": "^11.11.1",
     "js-yaml": "^4.1.0",
     "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

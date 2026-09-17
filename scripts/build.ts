@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
-import { Marked } from 'marked';
+import { Marked, type Renderer, type RendererObject, type Tokens } from 'marked';
 import hljs from 'highlight.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,7 +11,68 @@ const POSTS_DIR = path.join(ROOT, 'posts');
 const DIST = path.join(ROOT, 'dist');
 const BUILT_AT = new Date().toISOString();
 
-const SITE = {
+// ---------- types ----------
+interface SiteConfig {
+  url: string;
+  base: string;
+  title: string;
+  author: string;
+  description: string;
+  lang: string;
+  home: string;
+}
+
+type Frontmatter = Record<string, unknown>;
+
+interface Heading {
+  depth: number;
+  text: string;
+  id: string;
+}
+
+interface Post {
+  slug: string;
+  file: string;
+  html: string;
+  headings: Heading[];
+  title: string;
+  date: string;
+  updated: string | null;
+  category: string;
+  tags: string[];
+  summary: string;
+  cover: string | null;
+  minutes: number;
+  words: number;
+  url: string;
+  absUrl: string;
+}
+
+interface Category {
+  name: string;
+  path: string;
+  slugPath: string[];
+  posts: Post[];
+}
+
+interface LayoutOptions {
+  title: string;
+  description?: string;
+  canonical: string;
+  body: string;
+  jsonLd?: unknown;
+  active?: string;
+  ogType?: string;
+}
+
+interface SitemapEntry {
+  loc: string;
+  pri: string;
+  lastmod?: string;
+}
+
+// ---------- config ----------
+const SITE: SiteConfig = {
   url: 'https://s3hq4y.github.io',
   base: '/blogs',
   title: 's9y · 博客',
@@ -22,45 +83,52 @@ const SITE = {
 };
 
 // ---------- utils ----------
-const esc = (s = '') => String(s)
+const esc = (s: unknown = ''): string => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-const slugify = (s = '') => String(s).trim().toLowerCase()
+const slugify = (s: unknown = ''): string => String(s).trim().toLowerCase()
   .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'item';
 
-const abs = (p = '/') => SITE.url + SITE.base + (p.startsWith('/') ? p : '/' + p);
-const link = (p = '/') => SITE.base + (p.startsWith('/') ? p : '/' + p);
+const abs = (p = '/'): string => SITE.url + SITE.base + (p.startsWith('/') ? p : '/' + p);
+const link = (p = '/'): string => SITE.base + (p.startsWith('/') ? p : '/' + p);
 
-const fmtDate = (iso) => {
+const fmtDate = (iso: string): string => {
   const d = new Date(iso);
-  if (isNaN(d)) return String(iso);
+  if (isNaN(d.getTime())) return String(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-const readingTime = (md) => {
+const readingTime = (md: string): number => {
   const words = (md.match(/[\u4e00-\u9fa5]|[A-Za-z0-9]+/g) || []).length;
   return Math.max(1, Math.round(words / 300));
 };
 
-function parseFrontmatter(raw) {
-  raw = raw.replace(/^\uFEFF/, ''); // strip UTF-8 BOM
-  if (!raw.startsWith('---')) return { data: {}, body: raw };
-  const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!m) return { data: {}, body: raw };
-  let data = {};
-  try { data = yaml.load(m[1]) || {}; } catch (e) { console.warn('frontmatter error:', e.message); }
-  return { data, body: raw.slice(m[0].length) };
+function parseFrontmatter(raw: string): { data: Frontmatter; body: string } {
+  const text = raw.replace(/^\uFEFF/, ''); // strip UTF-8 BOM
+  if (!text.startsWith('---')) return { data: {}, body: text };
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { data: {}, body: text };
+  let data: Frontmatter = {};
+  try {
+    const loaded = yaml.load(m[1]);
+    if (loaded && typeof loaded === 'object' && !Array.isArray(loaded)) {
+      data = loaded as Frontmatter;
+    }
+  } catch (e) {
+    console.warn('frontmatter error:', (e as Error).message);
+  }
+  return { data, body: text.slice(m[0].length) };
 }
 
-function normalizeDate(v) {
+function normalizeDate(v: unknown): string | null {
   if (!v) return null;
   if (v instanceof Date) return v.toISOString();
   return String(v);
 }
 
-function excerpt(md, len = 140) {
+function excerpt(md: string, len = 140): string {
   const text = String(md)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`]*`/g, ' ')
@@ -74,42 +142,41 @@ function excerpt(md, len = 140) {
 }
 
 // ---------- markdown ----------
-function renderMarkdown(md) {
-  const headings = [];
-  const engine = new Marked({
-    gfm: true,
-    breaks: false,
-    renderer: {
-      code({ text, lang }) {
-        const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
-        const html = hljs.highlight(text, { language }).value;
-        return `<pre><code class="hljs language-${language}">${html}</code></pre>\n`;
-      },
-      heading({ tokens, depth }) {
-        const raw = tokens.map((t) => t.raw || '').join('').trim();
-        const text = this.parser.parseInline(tokens);
-        const base = slugify(raw);
-        let id = base, i = 1;
-        while (headings.some((h) => h.id === id)) id = `${base}-${i++}`;
-        headings.push({ depth, text: raw, id });
-        return `<h${depth} id="${id}">${text}</h${depth}>\n`;
-      },
+function renderMarkdown(md: string): { html: string; headings: Heading[] } {
+  const headings: Heading[] = [];
+  const renderer = {
+    code(token: Tokens.Code): string {
+      const lang = token.lang;
+      const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
+      const html = hljs.highlight(token.text, { language }).value;
+      return `<pre><code class="hljs language-${language}">${html}</code></pre>\n`;
     },
-  });
-  const html = engine.parse(md);
+    heading(this: Renderer, token: Tokens.Heading): string {
+      const raw = token.tokens.map((t) => t.raw || '').join('').trim();
+      const text = this.parser.parseInline(token.tokens);
+      const base = slugify(raw);
+      let id = base;
+      let i = 1;
+      while (headings.some((h) => h.id === id)) id = `${base}-${i++}`;
+      headings.push({ depth: token.depth, text: raw, id });
+      return `<h${token.depth} id="${id}">${text}</h${token.depth}>\n`;
+    },
+  };
+  const engine = new Marked({ gfm: true, breaks: false, renderer: renderer as RendererObject });
+  const html = engine.parse(md) as string;
   return { html, headings };
 }
 
 // ---------- load ----------
-function readPosts() {
+function readPosts(): Post[] {
   if (!fs.existsSync(POSTS_DIR)) return [];
   const files = fs.readdirSync(POSTS_DIR).filter((f) => f.endsWith('.md'));
-  const posts = [];
+  const posts: Post[] = [];
   for (const file of files) {
     const raw = fs.readFileSync(path.join(POSTS_DIR, file), 'utf8');
     const { data, body } = parseFrontmatter(raw);
     if (data.draft === true) continue;
-    const slug = slugify(data.slug || file.replace(/\.md$/, ''));
+    const slug = slugify(typeof data.slug === 'string' ? data.slug : file.replace(/\.md$/, ''));
     const { html, headings } = renderMarkdown(body);
     const date = normalizeDate(data.date) || new Date(0).toISOString();
     posts.push({
@@ -117,48 +184,48 @@ function readPosts() {
       file,
       html,
       headings,
-      title: data.title || slug,
+      title: typeof data.title === 'string' ? data.title : slug,
       date,
       updated: normalizeDate(data.updated),
-      category: data.category ? String(data.category) : '未分类',
+      category: typeof data.category === 'string' ? data.category : '未分类',
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-      summary: data.summary || excerpt(body),
-      cover: data.cover || null,
+      summary: typeof data.summary === 'string' ? data.summary : excerpt(body),
+      cover: typeof data.cover === 'string' ? data.cover : null,
       minutes: readingTime(body),
       words: (body.match(/[\u4e00-\u9fa5]|[A-Za-z0-9]+/g) || []).length,
       url: link(`/p/${slug}/`),
       absUrl: abs(`/p/${slug}/`),
     });
   }
-  posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+  posts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   return posts;
 }
 
-function tagMap(posts) {
-  const m = new Map();
+function tagMap(posts: Post[]): Map<string, Post[]> {
+  const m = new Map<string, Post[]>();
   for (const p of posts) for (const t of p.tags) {
     if (!m.has(t)) m.set(t, []);
-    m.get(t).push(p);
+    m.get(t)!.push(p);
   }
   return m;
 }
 
-function categoryMap(posts) {
-  const m = new Map();
+function categoryMap(posts: Post[]): Map<string, Category> {
+  const m = new Map<string, Category>();
   for (const p of posts) {
     const parts = String(p.category).split('/').map((s) => s.trim()).filter(Boolean);
     let acc = '';
     for (const part of parts) {
       acc = acc ? `${acc}/${part}` : part;
       if (!m.has(acc)) m.set(acc, { name: part, path: acc, slugPath: acc.split('/').map(slugify), posts: [] });
-      m.get(acc).posts.push(p);
+      m.get(acc)!.posts.push(p);
     }
   }
   return m;
 }
 
 // ---------- layout ----------
-function layout({ title, description, canonical, body, jsonLd, active = '', ogType = 'website' }) {
+function layout({ title, description, canonical, body, jsonLd, active = '', ogType = 'website' }: LayoutOptions): string {
   const full = title ? `${title} · ${SITE.title}` : SITE.title;
   return `<!doctype html>
 <html lang="${SITE.lang}">
@@ -215,7 +282,7 @@ ${body}
 }
 
 // ---------- pages ----------
-function postCard(p) {
+function postCard(p: Post): string {
   return `<article class="post-card">
   <a class="post-card-link" href="${p.url}">
     <h2>${esc(p.title)}</h2>
@@ -232,7 +299,7 @@ function postCard(p) {
 </article>`;
 }
 
-function renderIndex(posts) {
+function renderIndex(posts: Post[]): string {
   const body = `<section class="hero">
   <h1>${esc(SITE.title)}</h1>
   <p class="lede">${esc(SITE.description)}</p>
@@ -258,12 +325,12 @@ ${posts.map(postCard).join('\n')}
   });
 }
 
-function renderPost(p) {
+function renderPost(p: Post): string {
   const toc = p.headings.filter((h) => h.depth >= 2 && h.depth <= 3);
   const tocHtml = toc.length >= 3
     ? `<nav class="toc"><p class="toc-title">目录</p><ul>${toc.map((h) => `<li class="d${h.depth}"><a href="#${h.id}">${esc(h.text)}</a></li>`).join('')}</ul></nav>`
     : '';
-  const updated = p.updated && new Date(p.updated) > new Date(p.date)
+  const updated = p.updated && new Date(p.updated).getTime() > new Date(p.date).getTime()
     ? `<span class="sep">·</span><span>更新于 ${fmtDate(p.updated)}</span>` : '';
   const body = `<article class="post">
   <header class="post-header">
@@ -305,14 +372,14 @@ ${p.html}
   });
 }
 
-function renderTagIndex(tags) {
+function renderTagIndex(tags: Map<string, Post[]>): string {
   const body = `<section class="hero"><h1>标签</h1><p class="count">共 ${tags.size} 个标签</p></section>
 <section class="term-cloud">${[...tags.entries()].sort((a, b) => b[1].length - a[1].length)
     .map(([t, ps]) => `<a class="term" href="${link(`/tags/${slugify(t)}/`)}">#${esc(t)}<span class="n">${ps.length}</span></a>`).join('')}</section>`;
   return layout({ title: '标签', description: '按标签浏览全部文章。', canonical: abs('/tags/'), body, active: 'tags' });
 }
 
-function renderTagPage(tag, posts) {
+function renderTagPage(tag: string, posts: Post[]): string {
   const body = `<section class="hero"><h1>#${esc(tag)}</h1><p class="count">${posts.length} 篇文章</p></section>
 <section class="post-list">${posts.map(postCard).join('\n')}</section>`;
   return layout({
@@ -321,9 +388,9 @@ function renderTagPage(tag, posts) {
   });
 }
 
-function renderCategoryIndex(cats) {
+function renderCategoryIndex(cats: Map<string, Category>): string {
   const roots = [...cats.values()].filter((c) => !c.path.includes('/'));
-  const render = (c) => {
+  const render = (c: Category): string => {
     const children = [...cats.values()].filter((x) => x.path.startsWith(c.path + '/') && x.path.split('/').length === c.path.split('/').length + 1);
     return `<li><a href="${link(`/categories/${c.slugPath.join('/')}/`)}">${esc(c.name)}<span class="n">${c.posts.length}</span></a>${children.length ? `<ul>${children.map(render).join('')}</ul>` : ''}</li>`;
   };
@@ -332,7 +399,7 @@ function renderCategoryIndex(cats) {
   return layout({ title: '分类', description: '按分类浏览全部文章。', canonical: abs('/categories/'), body, active: 'categories' });
 }
 
-function renderCategoryPage(cat) {
+function renderCategoryPage(cat: Category): string {
   const crumbs = cat.path.split('/');
   const body = `<section class="hero"><h1>${esc(cat.name)}</h1>
   <p class="crumbs">${crumbs.map((c, i) => {
@@ -347,12 +414,12 @@ function renderCategoryPage(cat) {
   });
 }
 
-function renderArchive(posts) {
-  const byYear = new Map();
+function renderArchive(posts: Post[]): string {
+  const byYear = new Map<number, Post[]>();
   for (const p of posts) {
     const y = new Date(p.date).getFullYear();
     if (!byYear.has(y)) byYear.set(y, []);
-    byYear.get(y).push(p);
+    byYear.get(y)!.push(p);
   }
   const body = `<section class="hero"><h1>归档</h1><p class="count">共 ${posts.length} 篇文章</p></section>
 ${[...byYear.entries()].sort((a, b) => b[0] - a[0]).map(([y, ps]) => `<section class="archive-year">
@@ -362,13 +429,13 @@ ${[...byYear.entries()].sort((a, b) => b[0] - a[0]).map(([y, ps]) => `<section c
   return layout({ title: '归档', description: '按时间归档的全部文章。', canonical: abs('/archive/'), body, active: 'archive' });
 }
 
-function render404() {
+function render404(): string {
   const body = `<section class="hero"><h1>404</h1><p class="lede">页面不存在。</p><p><a href="${link('/')}">返回文章列表</a></p></section>`;
   return layout({ title: '404', description: '页面不存在。', canonical: abs('/404.html'), body });
 }
 
 // ---------- feeds ----------
-function renderFeed(posts) {
+function renderFeed(posts: Post[]): string {
   const updated = posts[0] ? posts[0].date : BUILT_AT;
   return `<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
@@ -391,8 +458,8 @@ ${posts.slice(0, 20).map((p) => `  <entry>
 `;
 }
 
-function renderSitemap(posts, cats, tags) {
-  const urls = [
+function renderSitemap(posts: Post[], cats: Map<string, Category>, tags: Map<string, Post[]>): string {
+  const urls: SitemapEntry[] = [
     { loc: abs('/'), pri: '1.0' },
     { loc: abs('/archive/'), pri: '0.6' },
     { loc: abs('/categories/'), pri: '0.6' },
@@ -409,16 +476,16 @@ ${urls.map((u) => `  <url><loc>${esc(u.loc)}</loc>${u.lastmod ? `<lastmod>${esc(
 }
 
 // ---------- write ----------
-function write(relPath, content) {
+function write(relPath: string, content: string): void {
   const target = path.join(DIST, relPath);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content);
 }
 
-function copyAssets() {
+function copyAssets(): void {
   const assets = path.join(DIST, 'assets');
   fs.mkdirSync(assets, { recursive: true });
-  const copies = [
+  const copies: Array<[string, string]> = [
     ['node_modules/github-markdown-css/github-markdown.css', 'assets/github-markdown.css'],
     ['node_modules/highlight.js/styles/github-dark.css', 'assets/highlight.css'],
     ['theme/style.css', 'assets/style.css'],
@@ -430,7 +497,7 @@ function copyAssets() {
   }
 }
 
-function main() {
+export function build(): void {
   fs.rmSync(DIST, { recursive: true, force: true });
   const posts = readPosts();
   const tags = tagMap(posts);
@@ -458,4 +525,6 @@ function main() {
   console.log(`built ${posts.length} posts, ${tags.size} tags, ${cats.size} categories -> dist/`);
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  build();
+}

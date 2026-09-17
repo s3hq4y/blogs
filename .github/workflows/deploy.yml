@@ -7,6 +7,7 @@ on:
       - 'posts/**'
       - 'theme/**'
       - 'scripts/**'
+      - 'tsconfig.json'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/deploy.yml'
@@ -34,6 +35,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Build site
         run: npm run build
