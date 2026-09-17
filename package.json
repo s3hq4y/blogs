@@ -1,0 +1,18 @@
+{
+  "name": "blogs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "s3hq4y's blog — static site generated from Markdown.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs",
+    "new": "node scripts/new.mjs"
+  },
+  "dependencies": {
+    "github-markdown-css": "^5.8.1",
+    "highlight.js": "^11.11.1",
+    "js-yaml": "^4.1.0",
+    "marked": "^15.0.0"
+  }
+}
