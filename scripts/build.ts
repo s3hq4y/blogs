@@ -245,6 +245,7 @@ function layout({ title, description, canonical, body, jsonLd, active = '', ogTy
 <meta name="twitter:title" content="${esc(full)}">
 <meta name="twitter:description" content="${esc(description || SITE.description)}">
 <link rel="alternate" type="application/atom+xml" title="${esc(SITE.title)}" href="${link('/feed.xml')}">
+<script>(function(){try{var f=localStorage.getItem('blog-font');if(f==='sans'||f==='pixel')document.documentElement.setAttribute('data-font',f);}catch(e){}})();</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060608'/%3E%3Crect x='8' y='8' width='16' height='16' fill='%23ff2d6f'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="${link('/assets/github-markdown.css')}">
 <link rel="stylesheet" href="${link('/assets/highlight.css')}">
@@ -252,6 +253,8 @@ function layout({ title, description, canonical, body, jsonLd, active = '', ogTy
 ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>` : ''}
 </head>
 <body>
+<div class="noise" aria-hidden="true"></div>
+<div class="glow" aria-hidden="true"></div>
 <header class="site-header">
   <div class="wrap">
     <a class="site-brand" href="${link('/')}"><span class="dot"></span>${esc(SITE.title)}</a>
@@ -261,6 +264,7 @@ ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script
       <a class="${active === 'categories' ? 'on' : ''}" href="${link('/categories/')}">分类</a>
       <a class="${active === 'tags' ? 'on' : ''}" href="${link('/tags/')}">标签</a>
       <a class="back" href="${SITE.home}">← 主站</a>
+      <button class="font-toggle" id="fontToggle" type="button" title="切换字体 / Toggle font" aria-label="切换字体"><span class="ico-pixel">字</span><span class="ico-sans">Aa</span></button>
     </nav>
   </div>
 </header>
@@ -276,6 +280,7 @@ ${body}
     <a href="${link('/feed.xml')}">RSS</a>
   </div>
 </footer>
+<script>(function(){var b=document.getElementById('fontToggle');if(!b)return;b.addEventListener('click',function(){var cur=document.documentElement.getAttribute('data-font')||'pixel';var next=cur==='sans'?'pixel':'sans';document.documentElement.setAttribute('data-font',next);try{localStorage.setItem('blog-font',next);}catch(e){}});})();</script>
 </body>
 </html>
 `;
@@ -494,6 +499,15 @@ function copyAssets(): void {
     const src = path.join(ROOT, from);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(DIST, to));
     else console.warn('missing asset:', from);
+  }
+  // fonts
+  const fontsDir = path.join(ROOT, 'theme', 'fonts');
+  if (fs.existsSync(fontsDir)) {
+    const outDir = path.join(DIST, 'assets', 'fonts');
+    fs.mkdirSync(outDir, { recursive: true });
+    for (const f of fs.readdirSync(fontsDir)) {
+      fs.copyFileSync(path.join(fontsDir, f), path.join(outDir, f));
+    }
   }
 }
 
