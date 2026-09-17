@@ -192,3 +192,14 @@ date: 2026-09-17 14:30:00            # 错误
 - [github-markdown-css](https://github.com/sindresorhus/github-markdown-css) — Markdown 排版样式
 
 没有框架，没有运行时依赖 —— 构建产物是纯静态 HTML + CSS。
+
+## 发布文章
+
+```bash
+npm run new -- "文章标题"     # 生成 posts/<slug>.md（draft: true）
+# 编辑文章，把 draft 改成 false
+npm run publish -- <slug>     # 提交并推送，触发 Actions 构建部署
+npm run publish -- all        # 发布全部
+```
+
+不带参数时 `npm run publish` 会自动检测 `posts/` 下所有改动。

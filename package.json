@@ -8,6 +8,7 @@
     "build": "tsx scripts/build.ts",
     "dev": "tsx scripts/serve.ts",
     "new": "tsx scripts/new.ts",
+    "publish": "tsx scripts/publish.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
