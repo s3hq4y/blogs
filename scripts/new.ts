@@ -21,19 +21,23 @@ const sign = tz >= 0 ? '+' : '-';
 const pad = (n: number): string => String(Math.floor(Math.abs(n))).padStart(2, '0');
 const iso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}${sign}${pad(tz / 60)}:${pad(tz % 60)}`;
 
-const file = path.join(POSTS, `${slug}.md`);
+// 每篇文章一个文件夹：posts/<slug>/index.md，图片等资源放在同目录下用相对路径引用。
+const dir = path.join(POSTS, slug);
+const file = path.join(dir, 'index.md');
 if (fs.existsSync(file)) { console.error('already exists:', file); process.exit(1); }
-fs.mkdirSync(POSTS, { recursive: true });
+fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(file, `---
 title: "${title}"
 date: "${iso}"
 category: 未分类
 tags: []
 summary: ""
+# pinned: true        # 置顶
+# cover: cover.png    # 头图（放在本文件夹内）
 draft: true
 ---
 
-在这里写正文。
+在这里写正文。图片用相对路径引用，例如：![说明](img/example.png)
 `);
 
-console.log(`created posts/${slug}.md (draft: true)`);
+console.log(`created posts/${slug}/index.md (draft: true)`);

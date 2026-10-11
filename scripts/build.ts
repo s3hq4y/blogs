@@ -18,6 +18,7 @@ interface SiteConfig {
   title: string;
   author: string;
   description: string;
+  intro: string[];
   lang: string;
   home: string;
 }
@@ -42,6 +43,8 @@ interface Post {
   tags: string[];
   summary: string;
   cover: string | null;
+  pinned: boolean;
+  dir: string | null; // 文章文件夹（相对 posts/），扁平 md 为 null
   minutes: number;
   words: number;
   url: string;
@@ -63,6 +66,7 @@ interface LayoutOptions {
   jsonLd?: unknown;
   active?: string;
   ogType?: string;
+  script?: string;
 }
 
 interface SitemapEntry {
@@ -72,15 +76,37 @@ interface SitemapEntry {
 }
 
 // ---------- config ----------
+// 部署到 GitHub Pages 时的子路径前缀；本地预览可通过 SITE_BASE='' 覆盖。
+const DEFAULT_BASE = process.env.SITE_BASE ?? '/blogs';
+
 const SITE: SiteConfig = {
   url: 'https://s3hq4y.github.io',
-  base: '/blogs',
+  base: DEFAULT_BASE,
   title: 's9y · 博客',
   author: 's3hq4y',
   description: 's3hq4y 的技术笔记：前端、实时 3D 与代理基础设施。',
+  intro: [
+    '我是 s3hq4y（s9y），前端与创意工程师。',
+    '用 TypeScript 与实时 3D 打造网页系统、交互工具与代理基础设施。',
+    '这里记录构建过程中的技术笔记与思考。',
+  ],
   lang: 'zh-CN',
   home: 'https://s3hq4y.github.io/',
 };
+
+// 主页「全部文章」之前额外展示的区块，可配置多个，按数组顺序渲染。
+// type='category'：按分类匹配（含子分类）；type='tag'：按标签匹配。
+// 示例：
+//   { title: '前端笔记', type: 'category', value: '技术/前端' },
+//   { title: '架构',     type: 'tag',      value: '架构' },
+const HOME_SECTIONS: Array<{ title: string; type: 'category' | 'tag'; value: string }> = [
+  { title: '能工智人', type: 'tag', value: '能工智人' },
+  // { title: '前端', type: 'category', value: '技术/前端' },
+  // { title: '架构', type: 'tag', value: '架构' },
+];
+
+// 浮动区块导航默认停靠侧：'left' | 'right'。
+const FLOAT_NAV_SIDE: 'left' | 'right' = 'left';
 
 // ---------- utils ----------
 const esc = (s: unknown = ''): string => String(s)
@@ -168,20 +194,54 @@ function renderMarkdown(md: string): { html: string; headings: Heading[] } {
 }
 
 // ---------- load ----------
-function readPosts(): Post[] {
+// 探测文章文件夹内的头图（cover.<ext>），返回相对文章文件夹的文件名。
+const COVER_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'svg', 'gif'];
+function detectCover(dirAbs: string): string | null {
+  for (const ext of COVER_EXTS) {
+    const name = `cover.${ext}`;
+    if (fs.existsSync(path.join(dirAbs, name))) return name;
+  }
+  return null;
+}
+
+interface PostSource {
+  slug: string;         // 文件夹名 / 文件名（未 slug 化前的原始标识，用于排序回退）
+  mdPath: string;       // index.md 绝对路径
+  dir: string | null;   // 相对 posts/ 的文件夹名；扁平 md 为 null
+}
+
+// 收集所有文章源：优先「文件夹/index.md」，同时兼容扁平「*.md」。
+function collectSources(): PostSource[] {
   if (!fs.existsSync(POSTS_DIR)) return [];
-  const files = fs.readdirSync(POSTS_DIR).filter((f) => f.endsWith('.md'));
+  const entries = fs.readdirSync(POSTS_DIR, { withFileTypes: true });
+  const sources: PostSource[] = [];
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const md = path.join(POSTS_DIR, e.name, 'index.md');
+      if (fs.existsSync(md)) sources.push({ slug: e.name, mdPath: md, dir: e.name });
+    } else if (e.isFile() && e.name.endsWith('.md')) {
+      sources.push({ slug: e.name.replace(/\.md$/, ''), mdPath: path.join(POSTS_DIR, e.name), dir: null });
+    }
+  }
+  return sources;
+}
+
+function readPosts(): Post[] {
   const posts: Post[] = [];
-  for (const file of files) {
-    const raw = fs.readFileSync(path.join(POSTS_DIR, file), 'utf8');
+  for (const src of collectSources()) {
+    const raw = fs.readFileSync(src.mdPath, 'utf8');
     const { data, body } = parseFrontmatter(raw);
     if (data.draft === true) continue;
-    const slug = slugify(typeof data.slug === 'string' ? data.slug : file.replace(/\.md$/, ''));
+    const slug = slugify(typeof data.slug === 'string' ? data.slug : src.slug);
     const { html, headings } = renderMarkdown(body);
     const date = normalizeDate(data.date) || new Date(0).toISOString();
+    // 头图：显式 cover 优先，否则在文件夹内自动探测 cover.<ext>。
+    const cover = typeof data.cover === 'string'
+      ? data.cover
+      : (src.dir ? detectCover(path.join(POSTS_DIR, src.dir)) : null);
     posts.push({
       slug,
-      file,
+      file: src.dir ? `${src.dir}/index.md` : src.slug + '.md',
       html,
       headings,
       title: typeof data.title === 'string' ? data.title : slug,
@@ -190,7 +250,9 @@ function readPosts(): Post[] {
       category: typeof data.category === 'string' ? data.category : '未分类',
       tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
       summary: typeof data.summary === 'string' ? data.summary : excerpt(body),
-      cover: typeof data.cover === 'string' ? data.cover : null,
+      cover,
+      pinned: data.pinned === true,
+      dir: src.dir,
       minutes: readingTime(body),
       words: (body.match(/[\u4e00-\u9fa5]|[A-Za-z0-9]+/g) || []).length,
       url: link(`/p/${slug}/`),
@@ -225,7 +287,7 @@ function categoryMap(posts: Post[]): Map<string, Category> {
 }
 
 // ---------- layout ----------
-function layout({ title, description, canonical, body, jsonLd, active = '', ogType = 'website' }: LayoutOptions): string {
+function layout({ title, description, canonical, body, jsonLd, active = '', ogType = 'website', script = '' }: LayoutOptions): string {
   const full = title ? `${title} · ${SITE.title}` : SITE.title;
   return `<!doctype html>
 <html lang="${SITE.lang}">
@@ -245,8 +307,10 @@ function layout({ title, description, canonical, body, jsonLd, active = '', ogTy
 <meta name="twitter:title" content="${esc(full)}">
 <meta name="twitter:description" content="${esc(description || SITE.description)}">
 <link rel="alternate" type="application/atom+xml" title="${esc(SITE.title)}" href="${link('/feed.xml')}">
-<script>(function(){try{var f=localStorage.getItem('blog-font');if(f==='sans'||f==='pixel')document.documentElement.setAttribute('data-font',f);}catch(e){}})();</script>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23060608'/%3E%3Crect x='8' y='8' width='16' height='16' fill='%23ff2d6f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230a0a0b'/%3E%3Crect x='8' y='8' width='16' height='16' fill='%23e4002b'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="${link('/assets/github-markdown.css')}">
 <link rel="stylesheet" href="${link('/assets/highlight.css')}">
 <link rel="stylesheet" href="${link('/assets/style.css')}">
@@ -264,7 +328,6 @@ ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script
       <a class="${active === 'categories' ? 'on' : ''}" href="${link('/categories/')}">分类</a>
       <a class="${active === 'tags' ? 'on' : ''}" href="${link('/tags/')}">标签</a>
       <a class="back" href="${SITE.home}">← 主站</a>
-      <button class="font-toggle" id="fontToggle" type="button" title="切换字体 / Toggle font" aria-label="切换字体"><span class="ico-pixel">字</span><span class="ico-sans">Aa</span></button>
     </nav>
   </div>
 </header>
@@ -280,38 +343,112 @@ ${body}
     <a href="${link('/feed.xml')}">RSS</a>
   </div>
 </footer>
-<script>(function(){var b=document.getElementById('fontToggle');if(!b)return;b.addEventListener('click',function(){var cur=document.documentElement.getAttribute('data-font')||'pixel';var next=cur==='sans'?'pixel':'sans';document.documentElement.setAttribute('data-font',next);try{localStorage.setItem('blog-font',next);}catch(e){}});})();</script>
+${script}
 </body>
 </html>
 `;
 }
 
 // ---------- pages ----------
+// 文章卡片：带可选头图（cover），在网格中显示。
 function postCard(p: Post): string {
-  return `<article class="post-card">
-  <a class="post-card-link" href="${p.url}">
-    <h2>${esc(p.title)}</h2>
-    <p class="post-card-summary">${esc(p.summary)}</p>
-  </a>
-  <div class="post-meta">
-    <time datetime="${esc(p.date)}">${fmtDate(p.date)}</time>
-    <span class="sep">·</span>
-    <span>${p.minutes} 分钟</span>
-    <span class="sep">·</span>
-    <a class="cat" href="${link(`/categories/${p.category.split('/').map(slugify).join('/')}/`)}">${esc(p.category)}</a>
-    ${p.tags.map((t) => `<a class="tag" href="${link(`/tags/${slugify(t)}/`)}">#${esc(t)}</a>`).join('')}
+  const cover = p.cover
+    ? `<a class="post-card-cover" href="${p.url}"><img src="${link(`/p/${p.slug}/${p.cover}`)}" alt="${esc(p.title)}" loading="lazy"></a>`
+    : '';
+  const pin = p.pinned ? `<span class="pin" title="置顶">置顶</span>` : '';
+  return `<article class="post-card${p.cover ? ' has-cover' : ''}" data-title="${esc(p.title.toLowerCase())}">
+  ${cover}
+  <div class="post-card-body">
+    <a class="post-card-link" href="${p.url}">
+      <h2>${pin}${esc(p.title)}</h2>
+      <p class="post-card-summary">${esc(p.summary)}</p>
+    </a>
+    <div class="post-meta">
+      <time datetime="${esc(p.date)}">${fmtDate(p.date)}</time>
+      <span class="sep">·</span>
+      <span>${p.minutes} 分钟</span>
+      <span class="sep">·</span>
+      <a class="cat" href="${link(`/categories/${p.category.split('/').map(slugify).join('/')}/`)}">${esc(p.category)}</a>
+      ${p.tags.map((t) => `<a class="tag" href="${link(`/tags/${slugify(t)}/`)}">#${esc(t)}</a>`).join('')}
+    </div>
   </div>
 </article>`;
 }
 
+// 匹配某篇文章是否属于给定分类（含其子分类）或标签。
+function matchSection(p: Post, s: { type: 'category' | 'tag'; value: string }): boolean {
+  if (s.type === 'tag') return p.tags.includes(s.value);
+  // 分类：精确匹配，或落在该分类的子路径下（value 为父级时包含子级）。
+  const cat = String(p.category);
+  return cat === s.value || cat.startsWith(s.value + '/');
+}
+
+interface NavItem { id: string; label: string; }
+
 function renderIndex(posts: Post[]): string {
-  const body = `<section class="hero">
-  <h1>${esc(SITE.title)}</h1>
-  <p class="lede">${esc(SITE.description)}</p>
-  <p class="count">共 ${posts.length} 篇文章</p>
+  const pinned = posts.filter((p) => p.pinned);
+  const rest = posts.filter((p) => !p.pinned);
+  const introHtml = SITE.intro.map((t) => `<p>${esc(t)}</p>`).join('\n    ');
+
+  const navItems: NavItem[] = [];
+  let extraSections = '';
+
+  if (pinned.length) {
+    navItems.push({ id: 'sec-pinned', label: '置顶' });
+    extraSections += `<section class="section" id="sec-pinned">
+  <h2 class="section-label">置顶</h2>
+  <div class="post-grid">${pinned.map(postCard).join('\n')}</div>
+</section>\n`;
+  }
+
+  // 可配置的额外区块（按配置顺序）。
+  HOME_SECTIONS.forEach((s, i) => {
+    const matched = posts.filter((p) => matchSection(p, s));
+    if (!matched.length) return;
+    const id = `sec-${i}-${slugify(s.title)}`;
+    navItems.push({ id, label: s.title });
+    extraSections += `<section class="section" id="${id}">
+  <h2 class="section-label">${esc(s.title)}</h2>
+  <div class="post-grid">${matched.map(postCard).join('\n')}</div>
+</section>\n`;
+  });
+
+  navItems.push({ id: 'sec-all', label: '全部文章' });
+
+  const navHtml = `<nav class="float-nav" data-side="${FLOAT_NAV_SIDE}" id="floatNav" aria-label="区块导航">
+  <button class="float-nav-toggle" id="floatNavToggle" type="button" aria-label="展开/收起导航" aria-expanded="false">
+    <span class="float-nav-icon"></span>
+  </button>
+  <ul class="float-nav-list">
+    ${navItems.map((n) => `<li><a href="#${n.id}" data-target="${n.id}">${esc(n.label)}</a></li>`).join('\n    ')}
+  </ul>
+</nav>`;
+
+  const body = `${navHtml}
+<section class="intro">
+  <div class="intro-lead">
+    <h1>${esc(SITE.title)}</h1>
+    <div class="intro-text">
+    ${introHtml}
+    </div>
+  </div>
+  <div class="intro-meta">
+    <span class="count">共 ${posts.length} 篇文章</span>
+    ${pinned.length ? `<span class="count">${pinned.length} 篇置顶</span>` : ''}
+  </div>
 </section>
-<section class="post-list">
-${posts.map(postCard).join('\n')}
+${extraSections}<section class="section" id="sec-all">
+  <div class="section-head">
+    <h2 class="section-label">全部文章</h2>
+    <div class="search">
+      <input type="search" id="postSearch" class="search-input" placeholder="搜索标题…" aria-label="按标题搜索文章" autocomplete="off">
+      <span class="search-count" id="searchCount" aria-live="polite"></span>
+    </div>
+  </div>
+  <div class="post-grid" id="allGrid">
+${rest.map(postCard).join('\n')}
+  </div>
+  <p class="search-empty" id="searchEmpty" hidden>没有匹配的文章。</p>
 </section>`;
   return layout({
     title: '',
@@ -327,8 +464,63 @@ ${posts.map(postCard).join('\n')}
       url: abs('/'),
       author: { '@type': 'Person', name: SITE.author },
     },
+    script: INDEX_SCRIPT,
   });
 }
+
+// 首页交互：标题搜索过滤 + 浮动导航展开/收起 + 滚动高亮当前区块。
+const INDEX_SCRIPT = `<script>(function(){
+  // ---- 标题搜索 ----
+  var input = document.getElementById('postSearch');
+  var grid = document.getElementById('allGrid');
+  var empty = document.getElementById('searchEmpty');
+  var countEl = document.getElementById('searchCount');
+  if (input && grid) {
+    var cards = Array.prototype.slice.call(grid.querySelectorAll('.post-card'));
+    var apply = function(){
+      var q = input.value.trim().toLowerCase();
+      var shown = 0;
+      cards.forEach(function(c){
+        var t = c.getAttribute('data-title') || '';
+        var hit = !q || t.indexOf(q) !== -1;
+        c.hidden = !hit;
+        if (hit) shown++;
+      });
+      if (empty) empty.hidden = shown !== 0;
+      if (countEl) countEl.textContent = q ? (shown + ' / ' + cards.length) : '';
+    };
+    input.addEventListener('input', apply);
+  }
+  // ---- 浮动导航 ----
+  var nav = document.getElementById('floatNav');
+  var toggle = document.getElementById('floatNavToggle');
+  if (nav && toggle) {
+    var setOpen = function(open){
+      nav.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      try { localStorage.setItem('blog-nav-open', open ? '1' : '0'); } catch(e) {}
+    };
+    toggle.addEventListener('click', function(){ setOpen(!nav.classList.contains('open')); });
+    try { if (localStorage.getItem('blog-nav-open') === '1') setOpen(true); } catch(e) {}
+    // 点击链接后自动收起（小屏）
+    nav.querySelectorAll('.float-nav-list a').forEach(function(a){
+      a.addEventListener('click', function(){ if (window.innerWidth < 900) setOpen(false); });
+    });
+  }
+  // ---- 滚动高亮 ----
+  var links = Array.prototype.slice.call(document.querySelectorAll('.float-nav-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); }).filter(Boolean);
+  if (sections.length && 'IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (!en.isIntersecting) return;
+        var id = en.target.id;
+        links.forEach(function(a){ a.classList.toggle('on', a.getAttribute('data-target') === id); });
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    sections.forEach(function(s){ io.observe(s); });
+  }
+})();</script>`;
 
 function renderPost(p: Post): string {
   const toc = p.headings.filter((h) => h.depth >= 2 && h.depth <= 3);
@@ -337,9 +529,12 @@ function renderPost(p: Post): string {
     : '';
   const updated = p.updated && new Date(p.updated).getTime() > new Date(p.date).getTime()
     ? `<span class="sep">·</span><span>更新于 ${fmtDate(p.updated)}</span>` : '';
+  const cover = p.cover
+    ? `<figure class="post-cover"><img src="${link(`/p/${p.slug}/${p.cover}`)}" alt="${esc(p.title)}"></figure>`
+    : '';
   const body = `<article class="post">
   <header class="post-header">
-    <h1>${esc(p.title)}</h1>
+    <h1>${esc(p.title)}</h1>${cover}
     <div class="post-meta">
       <time datetime="${esc(p.date)}">${fmtDate(p.date)}</time>
       ${updated}
@@ -511,7 +706,38 @@ function copyAssets(): void {
   }
 }
 
-export function build(): void {
+// 递归复制目录内容（保留相对结构）。
+function copyDirInto(srcDir: string, outDir: string): void {
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const e of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const from = path.join(srcDir, e.name);
+    const to = path.join(outDir, e.name);
+    if (e.isDirectory()) copyDirInto(from, to);
+    else if (e.isFile()) fs.copyFileSync(from, to);
+  }
+}
+
+// 把每篇文章文件夹里的非 md 资源复制到 dist/p/<slug>/，
+// 使 md 中的相对路径（如 img/x.png）在输出页面里指向正确位置。
+function copyPostAssets(posts: Post[]): void {
+  for (const p of posts) {
+    if (!p.dir) continue;
+    const srcDir = path.join(POSTS_DIR, p.dir);
+    const outDir = path.join(DIST, 'p', p.slug);
+    fs.mkdirSync(outDir, { recursive: true });
+    for (const e of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      if (e.name === 'index.md') continue;
+      const from = path.join(srcDir, e.name);
+      const to = path.join(outDir, e.name);
+      if (e.isDirectory()) copyDirInto(from, to);
+      else if (e.isFile()) fs.copyFileSync(from, to);
+    }
+  }
+}
+
+export function build(opts: { base?: string } = {}): void {
+  // 允许调用方覆盖 base（例如本地预览用空字符串，使资源从根路径加载）。
+  SITE.base = opts.base ?? DEFAULT_BASE;
   fs.rmSync(DIST, { recursive: true, force: true });
   const posts = readPosts();
   const tags = tagMap(posts);
@@ -535,6 +761,7 @@ export function build(): void {
   }, null, 2));
   write('.nojekyll', '');
   copyAssets();
+  copyPostAssets(posts);
 
   console.log(`built ${posts.length} posts, ${tags.size} tags, ${cats.size} categories -> dist/`);
 }

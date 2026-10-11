@@ -23,7 +23,8 @@ const MIME: Record<string, string> = {
 };
 
 console.log('building...');
-build();
+// 本地预览从 dist 根目录提供服务，因此使用空 base，避免资源带上 /blogs 前缀而 404。
+build({ base: '' });
 
 http.createServer((req, res) => {
   const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
@@ -42,5 +43,5 @@ http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' });
   fs.createReadStream(filePath).pipe(res);
 }).listen(PORT, '127.0.0.1', () => {
-  console.log(`\n  blogs dev  ->  http://127.0.0.1:${PORT}/blogs/\n`);
+  console.log(`\n  blogs dev  ->  http://127.0.0.1:${PORT}/\n`);
 });

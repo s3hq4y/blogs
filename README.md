@@ -16,7 +16,7 @@ s3hq4y 的博客。**把 Markdown 文件丢进 `posts/`，push 一下，自动�
 npm run new -- "我的文章标题"
 ```
 
-这会在 `posts/` 下生成一个带 frontmatter 的 Markdown 文件，`draft: true`（草稿状态，不会被发布）。编辑它，写完把 `draft` 改成 `false` 或删掉这一行：
+这会在 `posts/<slug>/` 下生成一个文件夹，内含带 frontmatter 的 `index.md`，`draft: true`（草稿状态，不会被发布）。编辑它，写完把 `draft` 改成 `false` 或删掉这一行：
 
 ```bash
 git add -A
@@ -26,7 +26,7 @@ git push
 
 推送后 GitHub Actions 自动构建部署，约 1 分钟上线。
 
-> 也可以直接在 GitHub 网页上往 `posts/` 拖入 `.md` 文件，同样触发部署。
+> 也可以直接在 GitHub 网页上往 `posts/` 拖入 `.md` 文件（扁平结构仍兼容），同样触发部署。
 
 ### 本地预览
 
@@ -35,7 +35,9 @@ npm install     # 首次
 npm run dev     # 构建 + 起本地服务器
 ```
 
-打开 <http://127.0.0.1:8090/blogs/>。`npm run dev` 会在启动时构建一次；改完文章重新跑一遍即可看到最新内容。
+打开 <http://127.0.0.1:8090/>。`npm run dev` 会在启动时构建一次；改完文章重新跑一遍即可看到最新内容。
+
+> 本地预览使用空 base（资源从根路径加载），线上部署仍带 `/blogs/` 前缀，互不影响。
 
 ### 构建
 
@@ -48,7 +50,17 @@ npm run typecheck   # 类型检查（CI 会跑，类型错误会让部署失败�
 
 ## 文章格式
 
-每篇文章是 `posts/` 下的一个 `.md` 文件，开头用 YAML frontmatter 声明元数据：
+**每篇文章是一个文件夹**：`posts/<slug>/index.md`，图片等资源放在同目录下，用**相对路径**引用。
+
+```
+posts/
+  hello-blog/
+    index.md          # 正文（frontmatter + markdown）
+    cover.png         # 头图（可选，放本目录）
+    img/diagram.png   # 正文引用的图片
+```
+
+`index.md` 开头用 YAML frontmatter 声明元数据：
 
 ```markdown
 ---
@@ -58,12 +70,18 @@ updated: "2026-09-20T09:00:00+08:00"
 category: 技术/前端
 tags: [JavaScript, 前端, GitHub Pages]
 summary: "显示在列表页和搜索结果里的一句话摘要。"
-cover: /blogs/assets/covers/hello.png
+pinned: false
+cover: cover.png
 draft: false
 ---
 
-正文从这里开始，正常写 Markdown。
+正文从这里开始，正常写 Markdown。图片用相对路径引用：
+
+![示意图](img/diagram.png)
 ```
+
+> 构建时会自动把文章文件夹内除 `index.md` 外的文件复制到 `dist/p/<slug>/`，因此相对路径在线上同样有效。
+> 旧的扁平写法 `posts/<slug>.md` 仍然兼容。
 
 ### 字段说明
 
@@ -75,11 +93,50 @@ draft: false
 | `category` | 否 | 分类，单个。缺省为「未分类」。支持 `父/子` 层级写法。 |
 | `tags` | 否 | 标签，数组。可多个。 |
 | `summary` | 否 | 摘要。缺省时自动从正文截取前 140 字。 |
-| `cover` | 否 | 封面图路径。 |
+| `cover` | 否 | 头图，相对文章文件夹的文件名（如 `cover.png`）。缺省时会自动探测文件夹内的 `cover.{png,jpg,jpeg,webp,svg,gif}`。会显示在主页卡片和文章页顶部。 |
+| `pinned` | 否 | `true` 时置顶，主页单独成区显示。 |
 | `draft` | 否 | `true` 时不发布，构建时直接跳过。 |
-| `slug` | 否 | URL 标识。缺省时用文件名（去掉 `.md`）。 |
+| `slug` | 否 | URL 标识。缺省时用文件夹名。 |
 
-文件名就是默认的 URL 标识：`posts/hello-blog.md` → `/blogs/p/hello-blog/`。
+文件夹名就是默认的 URL 标识：`posts/hello-blog/index.md` → `/blogs/p/hello-blog/`。
+
+---
+
+## 主页配置
+
+主页行为集中在 `scripts/build.ts` 顶部的几个常量，改完重新构建即可。
+
+### 额外分区（在「全部文章」之前展示）
+
+`HOME_SECTIONS` 可按顺序声明多个区块，每个区块展示某个分类或某个标签下的文章：
+
+```ts
+const HOME_SECTIONS: Array<{ title: string; type: 'category' | 'tag'; value: string }> = [
+  { title: '前端', type: 'category', value: '技术/前端' },
+  { title: '架构', type: 'tag', value: '架构' },
+];
+```
+
+- `type: 'category'`：`value` 为分类路径；写父级（如 `技术`）会包含其所有子分类。
+- `type: 'tag'`：`value` 为标签名，精确匹配。
+- 数组顺序即页面顺序；无匹配文章的分区会自动跳过。
+- 留空数组 `[]` 则不显示任何额外分区。
+
+### 浮动导航停靠侧
+
+```ts
+const FLOAT_NAV_SIDE: 'left' | 'right' = 'left';
+```
+
+主页左侧（或右侧）有一个默认收缩的浮动导航，点击展开后列出「置顶 / 各额外分区 / 全部文章」，点击跳转对应区块；滚动时自动高亮当前区块。展开状态会记忆到 localStorage。
+
+### 搜索
+
+「全部文章」区块带标题搜索框，仅按标题过滤（前端即时，无需后端）。
+
+### 网格自适应
+
+文章网格使用 `repeat(auto-fill, minmax(var(--grid-min), 1fr))`：窗口越宽每行放越多，窗口窄则自动减少列数。列宽阈值由 CSS 变量 `--grid-min` 控制（默认 300px，窄屏 220px）。
 
 ---
 
@@ -113,8 +170,11 @@ tags: [React, Cloudflare, 部署]
 ```
 blogs/
 ├── posts/              ← 你只需要动这里
-│   ├── hello-blog.md
-│   └── realtime-3d.md
+│   ├── hello-blog/
+│   │   ├── index.md
+│   │   └── cover.png
+│   └── realtime-3d/
+│       └── index.md
 ├── theme/
 │   └── style.css       ← 站点样式
 ├── scripts/
@@ -134,7 +194,7 @@ blogs/
 
 | 路径 | 内容 |
 | --- | --- |
-| `index.html` | 首页文章列表（按时间倒序） |
+| `index.html` | 首页（自我介绍 + 置顶区 + 可配置分区 + 搜索 + 自适应网格 + 浮动导航） |
 | `p/<slug>/index.html` | 每篇文章的独立页面 |
 | `categories/` | 分类索引 + 每个分类的页面 |
 | `tags/` | 标签索引 + 每个标签的页面 |
@@ -196,7 +256,7 @@ date: 2026-09-17 14:30:00            # 错误
 ## 发布文章
 
 ```bash
-npm run new -- "文章标题"     # 生成 posts/<slug>.md（draft: true）
+npm run new -- "文章标题"     # 生成 posts/<slug>/index.md（draft: true）
 # 编辑文章，把 draft 改成 false
 npm run publish -- <slug>     # 提交并推送，触发 Actions 构建部署
 npm run publish -- all        # 发布全部
